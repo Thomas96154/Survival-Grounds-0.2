@@ -1,132 +1,65 @@
+import math
 import random
-from config import TILE_SIZE, WORLD_WIDTH, WORLD_HEIGHT, GRAVITY, JUMP_STRENGTH
+from config import BLOCK_SIZE, ENEMY_FOLLOW_RANGE, ENEMY_SPEED, ELITE_SPEED
 
-# -----------------------------
-# ENEMY CLASS
-# -----------------------------
+
+def clamp(value, minimum, maximum):
+    return max(minimum, min(maximum, value))
+
+
+def terrain_height_at(x, z, terrain):
+    grid_x = clamp(x / BLOCK_SIZE, 0, len(terrain) - 1)
+    grid_z = clamp(z / BLOCK_SIZE, 0, len(terrain[0]) - 1)
+    x0 = int(grid_x)
+    z0 = int(grid_z)
+    x1 = min(x0 + 1, len(terrain) - 1)
+    z1 = min(z0 + 1, len(terrain[0]) - 1)
+    tx = grid_x - x0
+    tz = grid_z - z0
+    top = terrain[x0][z0] * (1 - tx) + terrain[x1][z0] * tx
+    bottom = terrain[x0][z1] * (1 - tx) + terrain[x1][z1] * tx
+    return top * (1 - tz) + bottom * tz
+
+
 class Enemy:
-    def __init__(self, canvas, x, y, color, hp, points, can_jump=False):
-        self.canvas = canvas
+    def __init__(self, x, z, terrain_height, color, hp, points, elite=False):
+        self.x = x
+        self.z = z
+        self.height = terrain_height
+        self.y = self.height * BLOCK_SIZE + 0.4
+        self.color = color
         self.hp = hp
-        self.max_hp = hp
         self.points = points
-        self.vy = 0
-        self.speed = 3
-        self.id = canvas.create_rectangle(x, y, x + TILE_SIZE, y + TILE_SIZE, fill=color)
-        self.dir = random.choice([-1, 1])
-        self.follow_range = 600
-        self.can_jump = can_jump
-        self.jump_cooldown = 0
+        self.elite = elite
+        self.speed = ELITE_SPEED if elite else ENEMY_SPEED
+        self.follow_range = ENEMY_FOLLOW_RANGE
+        self.wander_angle = random.random() * 2 * math.pi
+        self.wander_timer = random.uniform(1.0, 2.5)
 
-    def coords(self):
-        return self.canvas.coords(self.id)
+    def move(self, target_x, target_z, terrain, frame_scale=1.0):
+        dx = target_x - self.x
+        dz = target_z - self.z
+        distance = math.hypot(dx, dz)
 
-    def on_ground(self, world):
-        x1, y1, x2, y2 = self.coords()
-        bottom = int((y2 + 2) // TILE_SIZE)
-        left = int(x1 // TILE_SIZE)
-        right = int(x2 // TILE_SIZE)
-
-        if bottom >= WORLD_HEIGHT:
-            return True
-
-        for tx in range(left, right + 1):
-            if world[bottom][tx] != "air":
-                return True
-        return False
-
-    def move(self, world, player_x):
-        x1, y1, x2, y2 = self.coords()
-        center = (x1 + x2) / 2
-
-        # FOLLOW PLAYER
-        if abs(center - player_x) < self.follow_range:
-            self.dir = 1 if player_x > center else -1
-
-        dx = self.dir * self.speed
-
-        # HORIZONTAL COLLISION
-        new_x1 = x1 + dx
-        new_x2 = x2 + dx
-        old_left = int(x1 // TILE_SIZE)
-        old_right = int(x2 // TILE_SIZE)
-        new_left = int(new_x1 // TILE_SIZE)
-        new_right = int(new_x2 // TILE_SIZE)
-        top_tile = int(y1 // TILE_SIZE)
-        bottom_tile = int(y2 // TILE_SIZE)
-
-        blocked = False
-        if dx > 0:
-            # Only check tiles we're moving INTO
-            if new_right >= WORLD_WIDTH:
-                blocked = True
-            elif new_right > old_right:
-                for ty in range(top_tile, bottom_tile + 1):
-                    if world[ty][new_right] != "air":
-                        blocked = True
-                        break
+        if distance < self.follow_range:
+            direction_x = dx / max(distance, 0.0001)
+            direction_z = dz / max(distance, 0.0001)
         else:
-            # Only check tiles we're moving INTO
-            if new_left < 0:
-                blocked = True
-            elif new_left < old_left:
-                for ty in range(top_tile, bottom_tile + 1):
-                    if world[ty][new_left] != "air":
-                        blocked = True
-                        break
+            self.wander_timer -= frame_scale
+            if self.wander_timer <= 0.0 or distance < 0.5:
+                self.wander_angle += random.uniform(-1.5, 1.5)
+                self.wander_timer = random.uniform(20, 40)
+            direction_x = math.cos(self.wander_angle)
+            direction_z = math.sin(self.wander_angle)
 
-        if blocked:
-            dx = 0
-            self.dir *= -1
+        self.x += direction_x * self.speed * frame_scale
+        self.z += direction_z * self.speed * frame_scale
+        self.x = clamp(self.x, 0.2, (len(terrain) - 1) * BLOCK_SIZE - 0.2)
+        self.z = clamp(self.z, 0.2, (len(terrain[0]) - 1) * BLOCK_SIZE - 0.2)
 
-        self.canvas.move(self.id, dx, 0)
-
-        # JUMPING (for grunts)
-        self.jump_cooldown = max(0, self.jump_cooldown -1)
-        if self.can_jump and self.on_ground(world) and self.jump_cooldown == 0:
-            if random.random() < 0.02:  # 2% chance each frame
-                self.vy = JUMP_STRENGTH
-                self.jump_cooldown = 30  # cooldown so they don't spam jump
-
-        # VERTICAL COLLISION + GRAVITY
-        self.vy += GRAVITY
-        dy = self.vy
-
-        x1, y1, x2, y2 = self.coords()
-        new_y1 = y1 + dy
-        new_y2 = y2 + dy
-        left_tile = int(x1 // TILE_SIZE)
-        right_tile = int(x2 // TILE_SIZE)
-        top_tile = int(new_y1 // TILE_SIZE)
-        bottom_tile = int(new_y2 // TILE_SIZE)
-
-        blocked = False
-        if dy > 0:
-            if bottom_tile >= WORLD_HEIGHT:
-                blocked = True
-            else:
-                for tx in range(left_tile, right_tile + 1):
-                    if world[bottom_tile][tx] != "air":
-                        blocked = True
-                        break
-        else:
-            if top_tile < 0:
-                blocked = True
-            else:
-                for tx in range(left_tile, right_tile + 1):
-                    if world[top_tile][tx] != "air":
-                        blocked = True
-                        break
-
-        if blocked:
-            dy = 0
-            self.vy = 0
-
-        self.canvas.move(self.id, 0, dy)
+        self.height = terrain_height_at(self.x, self.z, terrain)
+        self.y = self.height * BLOCK_SIZE + 0.4
 
     def damage(self, amount):
         self.hp -= amount
-        if self.hp <= 0:
-            self.canvas.delete(self.id)
-            return True
-        return False
+        return self.hp <= 0
