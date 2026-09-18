@@ -4,7 +4,7 @@ Survival Grounds is a fullscreen first-person survival prototype built with Pyth
 
 ## Version
 
-Current development version: **0.3.0**
+Current development version: **0.2**
 
 This is a development release. The game is playable, but terrain, rendering, and enemy behavior are still being refined.
 
